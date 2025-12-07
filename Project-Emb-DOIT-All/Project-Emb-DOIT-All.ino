@@ -18,6 +18,12 @@ FirebaseConfig firebaseConfig;
 FirebaseAuth firebaseAuth;
 FirebaseJson json;
 
+// FastAPI configuration
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#define FASTAPI_SERVER "http://192.168.1.100:8000"  // เปลี่ยนเป็น IP address ของ FastAPI server
+HTTPClient http;
+
 #define ULTRA_TRINGPIN 25
 #define ULTRA_ECHOPIN 26
 
@@ -48,6 +54,7 @@ void Fan_off();
 void Relay_on();
 void Relay_off();
 void sendDataToFirebase();
+bool predictMotorState();
 
 BLYNK_WRITE(V6) {
   int pinValue = param.asInt();
@@ -110,15 +117,17 @@ void loop() {
   Ultra_Sensor();
   Micro_Sensor();
 
-  if (value_ultra < 30) {
-    Blynk.logEvent("motor_open", "Motor is opening!");
-  }
-
-  if (value_ultra < 30 && value_micro > 2000) {
-    Serial.print(F(", Result: Open"));
+  // Use LightGBM prediction via FastAPI instead of if-else
+  bool shouldOpen = predictMotorState();
+  
+  if (shouldOpen) {
+    Serial.print(F(", Result: Open (ML Prediction)"));
+    if (value_ultra < 30) {
+      Blynk.logEvent("motor_open", "Motor is opening!");
+    }
     toggleState();
   } else {
-    Serial.print(F(", Result: Close"));
+    Serial.print(F(", Result: Close (ML Prediction)"));
   }
   Serial.println();
   DHT_Sensor();
@@ -263,5 +272,71 @@ void sendDataToFirebase() {
   } else {
     Serial.print("Firebase error: ");
     Serial.println(firebaseData.errorReason());
+  }
+}
+
+bool predictMotorState() {
+  // Check WiFi connection
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi not connected, using fallback logic");
+    // Fallback to original logic if WiFi is not connected
+    return (value_ultra < 30 && value_micro > 2000);
+  }
+
+  http.begin(FASTAPI_SERVER "/predict");
+  http.addHeader("Content-Type", "application/json");
+
+  // Create JSON payload
+  StaticJsonDocument<200> doc;
+  doc["ultrasonic"] = value_ultra;
+  doc["microphone"] = value_micro;
+  doc["humidity"] = value_humidity;
+  doc["temperature"] = value_temp;
+  doc["photo"] = value_photo;
+  doc["flame"] = value_flame;
+
+  String jsonPayload;
+  serializeJson(doc, jsonPayload);
+
+  Serial.print("Sending to FastAPI: ");
+  Serial.println(jsonPayload);
+
+  int httpResponseCode = http.POST(jsonPayload);
+
+  if (httpResponseCode > 0) {
+    String response = http.getString();
+    Serial.print("FastAPI Response: ");
+    Serial.println(response);
+
+    // Parse JSON response
+    StaticJsonDocument<200> responseDoc;
+    DeserializationError error = deserializeJson(responseDoc, response);
+
+    if (!error) {
+      int prediction = responseDoc["prediction"];
+      float probability = responseDoc["probability"];
+      String message = responseDoc["message"];
+
+      Serial.print("Prediction: ");
+      Serial.print(message);
+      Serial.print(" (Probability: ");
+      Serial.print(probability);
+      Serial.println(")");
+
+      http.end();
+      return (prediction == 1);
+    } else {
+      Serial.print("JSON parsing error: ");
+      Serial.println(error.c_str());
+      http.end();
+      // Fallback to original logic
+      return (value_ultra < 30 && value_micro > 2000);
+    }
+  } else {
+    Serial.print("FastAPI request failed, error code: ");
+    Serial.println(httpResponseCode);
+    http.end();
+    // Fallback to original logic
+    return (value_ultra < 30 && value_micro > 2000);
   }
 }
