@@ -8,6 +8,16 @@
 #include <BlynkSimpleEsp32.h>
 BlynkTimer timer;
 
+// Firebase configuration
+#include <WiFi.h>
+#include <FirebaseESP32.h>
+#define FIREBASE_HOST "project-emb-a6725-default-rtdb.asia-southeast1.firebasedatabase.app"
+#define FIREBASE_AUTH "AIzaSyCFH00MqZBkP6sUacCclm4HFU6BbLm9G0w"
+FirebaseData firebaseData;
+FirebaseConfig firebaseConfig;
+FirebaseAuth firebaseAuth;
+FirebaseJson json;
+
 #define ULTRA_TRINGPIN 25
 #define ULTRA_ECHOPIN 26
 
@@ -35,6 +45,9 @@ void DHT_Sensor();
 void Photo_Sensor();
 void Fan_on();
 void Fan_off();
+void Relay_on();
+void Relay_off();
+void sendDataToFirebase();
 
 BLYNK_WRITE(V6) {
   int pinValue = param.asInt();
@@ -66,6 +79,14 @@ void setup() {
   Blynk.begin(BLYNK_AUTH_TOKEN, "Poomphasin 2.4G", "0956579194");
   timer.setInterval(1000L, myTimerEvent);
 
+  // Initialize Firebase
+  firebaseConfig.host = FIREBASE_HOST;
+  firebaseConfig.signer.tokens.legacy_token = FIREBASE_AUTH;
+  Firebase.begin(&firebaseConfig, &firebaseAuth);
+  Firebase.reconnectWiFi(true);
+  Firebase.setReadTimeout(firebaseData, 1000 * 60);
+  Firebase.setwriteSizeLimit(firebaseData, "tiny");
+
   dht.begin();  //DHT
   pinMode(FAN_INAPIN, OUTPUT);
   pinMode(FAN_INBPIN, OUTPUT);
@@ -74,8 +95,8 @@ void setup() {
   pinMode(ULTRA_TRINGPIN, OUTPUT);
   pinMode(ULTRA_ECHOPIN, OUTPUT);
   pinMode(ULTRA_ECHOPIN, OUTPUT);
-  pinMode(FALMEPIN, OUTPUT);
 
+  pinMode(FALMEPIN, INPUT);
   pinMode(MICROPIN, INPUT);
   pinMode(PHOTOPIN, INPUT);
 }
@@ -89,6 +110,10 @@ void loop() {
   Ultra_Sensor();
   Micro_Sensor();
 
+  if (value_ultra < 30) {
+    Blynk.logEvent("motor_open", "Motor is opening!");
+  }
+
   if (value_ultra < 30 && value_micro > 2000) {
     Serial.print(F(", Result: Open"));
     toggleState();
@@ -99,6 +124,9 @@ void loop() {
   DHT_Sensor();
   Photo_Sensor();
   Flame_Sensor();
+  
+  // Send data to Firebase
+  sendDataToFirebase();
 }
 
 void Micro_Sensor() {
@@ -193,13 +221,13 @@ void DHT_Sensor() {
   Serial.print(h);
   Serial.print(F("%  Temperature: "));
   Serial.print(t);
-  Serial.print(F("째C "));
+  Serial.print(F("°C "));
   Serial.print(f);
-  Serial.print(F("째F  Heat index: "));
+  Serial.print(F("°F  Heat index: "));
   Serial.print(hic);
-  Serial.print(F("째C "));
+  Serial.print(F("°C "));
   Serial.print(hif);
-  Serial.println(F("째F"));
+  Serial.println(F("°F"));
 }
 
 void Flame_Sensor() {
@@ -215,4 +243,25 @@ void Flame_Sensor() {
 
 void toggleState() {
   state = !state;
+}
+
+void sendDataToFirebase() {
+  // Create JSON object with all sensor data
+  json.clear();
+  json.set("humidity", value_humidity);
+  json.set("temperature", value_temp);
+  json.set("photo", value_photo);
+  json.set("ultrasonic", value_ultra);
+  json.set("microphone", value_micro);
+  json.set("flame", value_flame);
+  json.set("relay_state", state);
+  json.set("timestamp", millis());
+
+  // Send data to Firebase
+  if (Firebase.setJSON(firebaseData, "/sensors", json)) {
+    Serial.println("Data sent to Firebase successfully");
+  } else {
+    Serial.print("Firebase error: ");
+    Serial.println(firebaseData.errorReason());
+  }
 }
