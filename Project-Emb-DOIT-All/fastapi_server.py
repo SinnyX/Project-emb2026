@@ -3,29 +3,17 @@ from pydantic import BaseModel
 import numpy as np
 import pickle
 import os
-from typing import Optional
 
-try:
-    import lightgbm as lgb
-    LIGHTGBM_AVAILABLE = True
-except (ImportError, OSError):
-    LIGHTGBM_AVAILABLE = False
-
-app = FastAPI(title="ESP32 Motor Prediction API")
+app = FastAPI(title="LightGBM Prediction API")
 MODEL_PATH = "motor_prediction_model.pkl"
 model = None
 
 
-class SensorData(BaseModel):
-    ultrasonic: float
-    microphone: float
-    humidity: Optional[float] = None
-    temperature: Optional[float] = None
-    photo: Optional[float] = None
-    flame: Optional[float] = None
+class PredictRequest(BaseModel):
+    feature: float
 
 
-class PredictionResponse(BaseModel):
+class PredictResponse(BaseModel):
     prediction: int
     probability: float
     message: str
@@ -38,50 +26,7 @@ def load_model():
             model = pickle.load(f)
         print(f"Model loaded: {MODEL_PATH}")
     else:
-        create_model()
-
-
-def create_model():
-    global model
-    np.random.seed(42)
-    n = 2000
-    
-    ultrasonic = np.random.uniform(0, 100, n)
-    microphone = np.random.uniform(0, 4095, n)
-    
-    # Label: Open(1) when ultra < 30 AND micro > 2000
-    y = ((ultrasonic < 30) & (microphone > 2000)).astype(int)
-    X = np.column_stack([ultrasonic, microphone])
-    
-    if LIGHTGBM_AVAILABLE:
-        train_data = lgb.Dataset(X, label=y)
-        params = {
-            'objective': 'binary',
-            'metric': 'binary_logloss',
-            'boosting_type': 'gbdt',
-            'num_leaves': 31,
-            'learning_rate': 0.05,
-            'verbose': -1
-        }
-        model = lgb.train(params, train_data, num_boost_round=100)
-    else:
-        from sklearn.ensemble import GradientBoostingClassifier
-        model = GradientBoostingClassifier(n_estimators=100, learning_rate=0.05, max_depth=5)
-        model.fit(X, y)
-    
-    with open(MODEL_PATH, 'wb') as f:
-        pickle.dump(model, f)
-    print(f"Model created: {MODEL_PATH}")
-
-
-def predict(features: np.ndarray):
-    if hasattr(model, 'predict_proba'):
-        prob = float(model.predict_proba(features)[0][1])
-        pred = int(model.predict(features)[0])
-    else:
-        prob = float(model.predict(features)[0])
-        pred = 1 if prob > 0.5 else 0
-    return pred, prob
+        raise Exception(f"Model not found: {MODEL_PATH}")
 
 
 @app.on_event("startup")
@@ -91,7 +36,7 @@ async def startup():
 
 @app.get("/")
 async def root():
-    return {"message": "ESP32 Motor Prediction API", "status": "running"}
+    return {"message": "LightGBM Prediction API", "status": "running"}
 
 
 @app.get("/health")
@@ -99,15 +44,16 @@ async def health():
     return {"status": "healthy", "model_loaded": model is not None}
 
 
-@app.post("/predict", response_model=PredictionResponse)
-async def predict_motor(data: SensorData):
+@app.post("/predict", response_model=PredictResponse)
+async def predict(data: PredictRequest):
     if model is None:
         raise HTTPException(500, "Model not loaded")
     
-    features = np.array([[data.ultrasonic, data.microphone]])
-    pred, prob = predict(features)
+    features = np.array([[data.feature]])
+    pred = int(model.predict(features)[0])
+    prob = float(model.predict_proba(features)[0][1])
     
-    return PredictionResponse(
+    return PredictResponse(
         prediction=pred,
         probability=prob,
         message="Open" if pred == 1 else "Close"

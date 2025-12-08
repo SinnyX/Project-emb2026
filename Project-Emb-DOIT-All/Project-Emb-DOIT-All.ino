@@ -21,18 +21,18 @@ FirebaseJson json;
 // FastAPI configuration
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#define FASTAPI_SERVER "http://192.168.1.100:8000"  // เปลี่ยนเป็น IP address ของ FastAPI server
+#define FASTAPI_SERVER "https://fastapi-lightgbm-deploy-6hef.vercel.app"
 HTTPClient http;
 
 #define ULTRA_TRINGPIN 25
 #define ULTRA_ECHOPIN 26
 
 #define MICROPIN 33
-#define RELAYPIN 12
-#define FAN_INAPIN 14
-#define FAN_INBPIN 39
+#define RELAYPIN 14
+#define FAN_INAPIN 18
+#define FAN_INBPIN 19
 #define PHOTOPIN 32
-#define FALMEPIN 35
+#define FALMEPIN 34
 
 #include "DHT.h"
 #define DHTPIN 27
@@ -83,7 +83,8 @@ void myTimerEvent() {
 void setup() {
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);  //disable detector
   Serial.begin(115200);
-  Blynk.begin(BLYNK_AUTH_TOKEN, "Poomphasin 2.4G", "0956579194");
+  // Blynk.begin(BLYNK_AUTH_TOKEN, "Poomphasin 2.4G", "0956579194");
+  Blynk.begin(BLYNK_AUTH_TOKEN, "iPhonePanunan", "@1234567890");
   timer.setInterval(1000L, myTimerEvent);
 
   // Initialize Firebase
@@ -111,6 +112,7 @@ void setup() {
 void loop() {
   Blynk.run();
   timer.run();
+  Blynk.syncVirtual(V6);
   // Wait a few seconds between measurements.
   delay(2000);
 
@@ -285,15 +287,17 @@ bool predictMotorState() {
 
   http.begin(FASTAPI_SERVER "/predict");
   http.addHeader("Content-Type", "application/json");
+  
+  // For HTTPS, skip certificate validation (not recommended for production)
+  // For production, add proper SSL certificate
+  #ifdef ESP32
+    http.setInsecure(); // Skip SSL certificate validation for Vercel
+  #endif
 
-  // Create JSON payload
-  StaticJsonDocument<200> doc;
-  doc["ultrasonic"] = value_ultra;
-  doc["microphone"] = value_micro;
-  doc["humidity"] = value_humidity;
-  doc["temperature"] = value_temp;
-  doc["photo"] = value_photo;
-  doc["flame"] = value_flame;
+  // Create JSON payload - Vercel API expects only "feature" field
+  // Using ultrasonic value as the feature
+  StaticJsonDocument<100> doc;
+  doc["feature"] = value_ultra;
 
   String jsonPayload;
   serializeJson(doc, jsonPayload);
@@ -313,6 +317,20 @@ bool predictMotorState() {
     DeserializationError error = deserializeJson(responseDoc, response);
 
     if (!error) {
+      // Check if response has error field
+      if (responseDoc.containsKey("error")) {
+        Serial.print("API Error: ");
+        Serial.println(responseDoc["error"].as<String>());
+        if (responseDoc.containsKey("detail")) {
+          Serial.print("Detail: ");
+          Serial.println(responseDoc["detail"].as<String>());
+        }
+        http.end();
+        // Fallback to original logic
+        return (value_ultra < 30 && value_micro > 2000);
+      }
+      
+      // Normal response
       int prediction = responseDoc["prediction"];
       float probability = responseDoc["probability"];
       String message = responseDoc["message"];

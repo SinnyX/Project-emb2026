@@ -1,10 +1,3 @@
 #!/bin/bash
-
-# Script to run FastAPI server
-
-echo "Installing dependencies..."
-pip install -r requirements.txt
-
-echo "Starting FastAPI server..."
+pip install fastapi uvicorn scikit-learn numpy -q
 python fastapi_server.py
-

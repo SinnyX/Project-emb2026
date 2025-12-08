@@ -1,0 +1,11 @@
+{
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api/index.py" }
+  ],
+  "functions": {
+    "api/index.py": {
+      "includeFiles": "api/motor_prediction_model.pkl"
+    }
+  }
+}
+
